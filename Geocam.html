@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>GeoCam Indonesia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            /* Prevent bounce on iOS */
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        #camera-feed {
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(1); /* Default rear camera */
+        }
+        /* Mirror front camera functionality handled in JS */
+        
+        .overlay-text {
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+        }
+
+        /* Flash animation */
+        @keyframes flash-animation {
+            0% { opacity: 0; }
+            50% { opacity: 1; background: white; }
+            100% { opacity: 0; }
+        }
+        .flash-effect {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 50;
+            pointer-events: none;
+            animation: flash-animation 0.2s ease-out;
+        }
+    </style>
+</head>
+<body class="relative h-screen w-screen text-white">
+
+    <!-- Flash Overlay -->
+    <div id="flash" class="hidden"></div>
+
+    <!-- Video Feed -->
+    <video id="camera-feed" autoplay playsinline muted></video>
+
+    <!-- Canvas for Capture (Hidden) -->
+    <canvas id="photo-canvas" class="hidden"></canvas>
+
+    <!-- UI Overlay (Live Preview) -->
+    <div class="absolute top-0 left-0 w-full p-4 bg-gradient-to-b from-black/60 to-transparent z-10 pt-8">
+        <div class="flex justify-between items-start">
+            <div>
+                <h1 class="text-xl font-bold text-yellow-400"><i class="fas fa-map-marker-alt mr-2"></i>GeoCam ID</h1>
+                
+                <!-- Modified: Click triggers Modal now -->
+                <div onclick="openSearchModal()" class="cursor-pointer group">
+                    <p id="live-location" class="text-sm font-medium overlay-text group-hover:text-yellow-300 transition inline-flex items-center gap-2 border-b border-transparent group-hover:border-yellow-300 border-dashed pb-0.5">
+                        Mencari Lokasi... 
+                        <i class="fas fa-pen text-xs opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                    </p>
+                </div>
+
+                <p id="live-weather" class="text-xs text-gray-200 mt-1 overlay-text">Memuat Cuaca...</p>
+            </div>
+            <div class="text-right">
+                <p id="live-time" class="text-2xl font-mono font-bold overlay-text">00:00:00</p>
+                <p id="live-date" class="text-xs font-medium overlay-text">Senin, 01 Jan 2024</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Info Overlay (Live Preview) - Raised significantly -->
+    <div class="absolute bottom-56 left-4 z-10 text-xs font-mono text-gray-300 leading-tight overlay-text">
+        <p>LAT: <span id="live-lat" class="text-white">-</span></p>
+        <p>LON: <span id="live-lon" class="text-white">-</span></p>
+        <p>ALT: <span id="live-alt" class="text-white">-</span> MDPL</p>
+        <p>AKURASI: <span id="live-acc" class="text-white">-</span> M</p>
+    </div>
+
+    <!-- Controls - Raised significantly -->
+    <div class="absolute bottom-0 w-full h-48 bg-gradient-to-t from-black/80 via-black/50 to-transparent flex justify-around items-end z-20 pb-20">
+        <!-- Gallery/Preview (Dummy) -->
+        <button onclick="alert('Foto tersimpan di galeri perangkat Anda.')" class="w-12 h-12 rounded-full bg-gray-800 border border-gray-600 flex items-center justify-center active:scale-95 transition mb-2">
+            <i class="fas fa-images text-white"></i>
+        </button>
+
+        <!-- Shutter Button -->
+        <button id="shutter-btn" class="w-20 h-20 rounded-full bg-white border-4 border-gray-300 flex items-center justify-center active:scale-90 transition shadow-lg shadow-white/20">
+            <div class="w-16 h-16 rounded-full bg-white border-2 border-black"></div>
+        </button>
+
+        <!-- Switch Camera -->
+        <button id="switch-cam-btn" class="w-12 h-12 rounded-full bg-gray-800 border border-gray-600 flex items-center justify-center active:scale-95 transition mb-2">
+            <i class="fas fa-sync-alt text-white"></i>
+        </button>
+    </div>
+
+    <!-- Permission Modal -->
+    <div id="permission-modal" class="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-6 hidden">
+        <div class="bg-gray-800 p-6 rounded-lg text-center max-w-sm">
+            <i class="fas fa-camera text-4xl text-yellow-400 mb-4"></i>
+            <h2 class="text-xl font-bold mb-2">Izin Diperlukan</h2>
+            <p class="text-gray-300 mb-6 text-sm">Aplikasi ini memerlukan akses Kamera dan Lokasi (GPS) agar fitur GeoTagging berfungsi.</p>
+            <button onclick="startApp()" class="bg-yellow-500 text-black font-bold py-2 px-6 rounded-full hover:bg-yellow-400 w-full">
+                Mulai Kamera
+            </button>
+        </div>
+    </div>
+
+    <!-- NEW: Search/Edit Location Modal -->
+    <div id="search-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6 hidden">
+        <div class="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-sm shadow-2xl">
+            <h2 class="text-lg font-bold mb-1 text-white">Lokasi Manual</h2>
+            <p class="text-xs text-gray-400 mb-4">Edit teks lokasi atau cari tempat spesifik di Maps.</p>
+            
+            <input type="text" id="manual-location-input" 
+                class="w-full p-3 rounded-lg bg-gray-800 text-white border border-gray-600 mb-4 focus:outline-none focus:border-yellow-500 focus:ring-1 focus:ring-yellow-500 text-sm" 
+                placeholder="Contoh: Gedung Sate, Bandung...">
+            
+            <div class="flex gap-3">
+                <button onclick="closeSearchModal()" class="flex-1 bg-gray-700 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-gray-600 transition">
+                    Batal
+                </button>
+                <button onclick="executeSearch()" class="flex-1 bg-yellow-500 text-black text-sm font-bold py-2.5 rounded-lg hover:bg-yellow-400 transition flex items-center justify-center gap-2">
+                    <i class="fas fa-search-location"></i> Update & Cari
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Variables ---
+        const video = document.getElementById('camera-feed');
+        const canvas = document.getElementById('photo-canvas');
+        const shutterBtn = document.getElementById('shutter-btn');
+        const switchBtn = document.getElementById('switch-cam-btn');
+        const flashDiv = document.getElementById('flash');
+        
+        let stream = null;
+        let currentFacingMode = 'environment'; // 'user' or 'environment'
+        let isManualLocation = false; // Flag to stop auto-overwrite if user edited manually
+        let currentGeoData = {
+            lat: 0,
+            lon: 0,
+            alt: 0,
+            acc: 0,
+            address: 'Lokasi tidak ditemukan',
+            weather: 'Memuat data...',
+            temp: '-'
+        };
+
+        // --- Initialization ---
+        window.onload = () => {
+            document.getElementById('permission-modal').classList.remove('hidden');
+        };
+
+        async function startApp() {
+            document.getElementById('permission-modal').classList.add('hidden');
+            await initCamera();
+            initGeolocation();
+            startClock();
+        }
+
+        // --- Camera Logic ---
+        async function initCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: currentFacingMode,
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                };
+                
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                
+                if (currentFacingMode === 'user') {
+                    video.style.transform = 'scaleX(-1)';
+                } else {
+                    video.style.transform = 'scaleX(1)';
+                }
+
+            } catch (err) {
+                console.error("Camera Error:", err);
+                alert("Gagal mengakses kamera. Pastikan izin diberikan.");
+            }
+        }
+
+        switchBtn.addEventListener('click', () => {
+            currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+            initCamera();
+        });
+
+        // --- Geolocation & Weather Logic ---
+        function initGeolocation() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(
+                    successGeo, 
+                    errorGeo, 
+                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                );
+            } else {
+                currentGeoData.address = "GPS tidak didukung";
+            }
+        }
+
+        function successGeo(position) {
+            const { latitude, longitude, altitude, accuracy } = position.coords;
+            
+            currentGeoData.lat = latitude.toFixed(6);
+            currentGeoData.lon = longitude.toFixed(6);
+            currentGeoData.alt = altitude ? Math.round(altitude) : 0;
+            currentGeoData.acc = Math.round(accuracy);
+
+            document.getElementById('live-lat').innerText = currentGeoData.lat;
+            document.getElementById('live-lon').innerText = currentGeoData.lon;
+            document.getElementById('live-alt').innerText = currentGeoData.alt;
+            document.getElementById('live-acc').innerText = currentGeoData.acc;
+
+            // Only fetch auto address if user hasn't manually edited it
+            if (!isManualLocation && (currentGeoData.weather === 'Memuat data...' || !currentGeoData.address)) {
+                fetchWeather(latitude, longitude);
+                fetchAddress(latitude, longitude);
+            }
+        }
+
+        function errorGeo(err) {
+            console.warn(err);
+            if (!isManualLocation) {
+                document.getElementById('live-location').innerText = "Sinyal GPS Lemah";
+            }
+        }
+
+        async function fetchWeather(lat, lon) {
+            try {
+                const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const code = data.current_weather.weathercode;
+                const temp = data.current_weather.temperature;
+                const desc = getWeatherDesc(code);
+
+                currentGeoData.weather = desc;
+                currentGeoData.temp = temp;
+
+                document.getElementById('live-weather').innerHTML = `<i class="fas fa-cloud-sun"></i> ${temp}°C ${desc}`;
+            } catch (e) {
+                console.error("Weather Error", e);
+                currentGeoData.weather = "Data Cuaca N/A";
+            }
+        }
+
+        function getWeatherDesc(code) {
+            const codes = {
+                0: "Cerah", 1: "Cerah Berawan", 2: "Berawan", 3: "Mendung",
+                45: "Berkabut", 48: "Kabut Es", 51: "Gerimis Ringan", 53: "Gerimis",
+                55: "Gerimis Lebat", 61: "Hujan Ringan", 63: "Hujan Sedang",
+                65: "Hujan Lebat", 80: "Hujan Lokal", 95: "Badai Petir"
+            };
+            return codes[code] || "Berawan";
+        }
+
+        async function fetchAddress(lat, lon) {
+            // Safety check: if user already typed manually, don't overwrite
+            if(isManualLocation) return;
+
+            try {
+                const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=id`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                let loc = data.locality || data.city || "";
+                let prov = data.principalSubdivision || "";
+                
+                const fullAddr = `${loc}, ${prov}`;
+                currentGeoData.address = fullAddr;
+                updateLocationDisplay(fullAddr);
+
+            } catch (e) {
+                console.error("Address Error", e);
+                if (!isManualLocation) {
+                    currentGeoData.address = "Lokasi Tidak Diketahui";
+                    updateLocationDisplay("Lokasi Tidak Diketahui");
+                }
+            }
+        }
+
+        function updateLocationDisplay(text) {
+            document.getElementById('live-location').innerHTML = `${text} <i class="fas fa-pen text-xs opacity-50 ml-1"></i>`;
+        }
+
+        // --- NEW: Search & Manual Edit Logic ---
+        
+        function openSearchModal() {
+            const modal = document.getElementById('search-modal');
+            const input = document.getElementById('manual-location-input');
+            
+            // Pre-fill with current detected address
+            // Strip HTML tags if any
+            let cleanAddress = currentGeoData.address.replace(/<[^>]*>?/gm, '');
+            if (cleanAddress === 'Mencari Lokasi...' || cleanAddress === 'Lokasi Tidak Diketahui') {
+                cleanAddress = '';
+            }
+            
+            input.value = cleanAddress;
+            modal.classList.remove('hidden');
+            
+            // Focus input after a short delay to allow transition
+            setTimeout(() => input.focus(), 100);
+        }
+
+        function closeSearchModal() {
+            document.getElementById('search-modal').classList.add('hidden');
+        }
+
+        function executeSearch() {
+            const input = document.getElementById('manual-location-input');
+            const manualText = input.value.trim();
+
+            if (manualText) {
+                // 1. Update Internal Data & Display
+                currentGeoData.address = manualText;
+                isManualLocation = true; // Stop auto-updates overriding this
+                updateLocationDisplay(manualText);
+
+                // 2. Open Google Maps Search
+                const query = encodeURIComponent(manualText);
+                const url = `https://www.google.com/maps/search/?api=1&query=${query}`;
+                window.open(url, '_blank');
+            }
+
+            closeSearchModal();
+        }
+
+        // --- Clock Logic ---
+        function startClock() {
+            const updateTime = () => {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('id-ID', { hour12: false });
+                const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+                
+                document.getElementById('live-time').innerText = timeStr;
+                document.getElementById('live-date').innerText = dateStr;
+            };
+            setInterval(updateTime, 1000);
+            updateTime();
+        }
+
+        // --- Capture & Draw Logic ---
+        shutterBtn.addEventListener('click', () => {
+            flashDiv.classList.remove('hidden');
+            flashDiv.classList.add('flash-effect');
+            setTimeout(() => {
+                flashDiv.classList.remove('flash-effect');
+                flashDiv.classList.add('hidden');
+            }, 200);
+
+            takePhoto();
+        });
+
+        function takePhoto() {
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            const ctx = canvas.getContext('2d');
+
+            if (currentFacingMode === 'user') {
+                ctx.translate(width, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(video, 0, 0, width, height);
+            
+            if (currentFacingMode === 'user') {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+            }
+
+            const fontSizeTitle = width * 0.04;
+            const fontSizeBody = width * 0.025;
+            const padding = width * 0.03;
+            const boxHeight = height * 0.25;
+
+            const gradient = ctx.createLinearGradient(0, height - boxHeight, 0, height);
+            gradient.addColorStop(0, "rgba(0,0,0,0)");
+            gradient.addColorStop(0.5, "rgba(0,0,0,0.6)");
+            gradient.addColorStop(1, "rgba(0,0,0,0.9)");
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, height - boxHeight, width, boxHeight);
+
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            const timeStr = now.toLocaleTimeString('id-ID', { hour12: false }) + " WIB";
+            
+            ctx.fillStyle = "white";
+            ctx.shadowColor = "black";
+            ctx.shadowBlur = 5;
+
+            ctx.font = `bold ${fontSizeTitle}px sans-serif`;
+            // Ensure we print the cleaner text without icons
+            const cleanAddr = currentGeoData.address.replace(/<[^>]*>?/gm, '');
+            ctx.fillText(cleanAddr, padding, height - (padding * 4));
+
+            ctx.font = `${fontSizeBody}px monospace`;
+            ctx.fillText(`Lat: ${currentGeoData.lat}  Long: ${currentGeoData.lon}`, padding, height - (padding * 2.8));
+            ctx.fillText(`Alt: ${currentGeoData.alt}m mdpl  Akurasi: ${currentGeoData.acc}m`, padding, height - (padding * 1.8));
+
+            ctx.fillText(`${dateStr} - ${timeStr}`, padding, height - (padding * 0.8));
+            
+            const weatherText = `${currentGeoData.temp}°C ${currentGeoData.weather}`;
+            const textWidth = ctx.measureText(weatherText).width;
+            ctx.fillText(weatherText, width - textWidth - padding, height - (padding * 0.8));
+
+            saveImage();
+        }
+
+        function saveImage() {
+            const imageURL = canvas.toDataURL("image/png");
+            
+            const link = document.createElement('a');
+            const filename = `GeoCam_${new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")}.png`;
+            
+            link.href = imageURL;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>
+
+
+
